@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Epstein Scraper Runner</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif; margin: 24px; background: #f7f8fb; color: #1b1f24; }
+    .card { background: #fff; border: 1px solid #dde2ea; border-radius: 10px; padding: 16px; max-width: 1200px; }
+    h1 { margin: 0 0 12px 0; font-size: 28px; }
+    .controls { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
+    .controls input { padding: 10px 12px; border: 1px solid #cdd5df; border-radius: 8px; min-width: 320px; }
+    button { padding: 10px 16px; border: 0; border-radius: 8px; background: #0b5fff; color: #fff; cursor: pointer; }
+    button:disabled { opacity: .6; cursor: not-allowed; }
+    .status { margin: 8px 0; font-size: 14px; }
+    .list-wrap { max-height: 520px; overflow-y: auto; border: 1px solid #e8edf4; border-radius: 8px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { border-bottom: 1px solid #e8edf4; text-align: left; padding: 8px; vertical-align: top; }
+    th { background: #f2f5fa; position: sticky; top: 0; z-index: 2; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .viewed-col { width: 72px; white-space: nowrap; }
+    .notes-col { width: 520px; }
+    .notes-input { width: 500px; max-width: 100%; }
+    .note-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 4px; }
+    .note-tag { font-size: 11px; line-height: 1.2; padding: 2px 6px; border-radius: 999px; background: #e8eefc; color: #20407e; }
+    .meta { color: #4c5668; font-size: 13px; margin: 6px 0; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Epstein Scraper Runner</h1>
+    <div class="controls">
+      <input id="query" value="no images produced" />
+      <button id="start">Start</button>
+    </div>
+    <div id="status" class="status">Idle</div>
+    <div id="meta" class="meta"></div>
+    <div class="list-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Filename</th>
+            <th>.mp4 Filename</th>
+            <th class="viewed-col">Viewed?</th>
+            <th class="notes-col">Notes</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <datalist id="noteTags"></datalist>
+  </div>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    const metaEl = document.getElementById('meta');
+    const rowsEl = document.getElementById('rows');
+    const startBtn = document.getElementById('start');
+    const queryEl = document.getElementById('query');
+    const noteTagsEl = document.getElementById('noteTags');
+    const rowMeta = new Map();
+
+    function esc(s) {
+      return String(s || '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+
+    function tokenizeNotes(value) {
+      return String(value || '')
+        .split(',')
+        .map((x) => x.trim())
+        .filter((x) => x.length > 0);
+    }
+
+    function updateTagSuggestions() {
+      const tags = new Set();
+      rowMeta.forEach((meta) => tokenizeNotes(meta.notes).forEach((t) => tags.add(t)));
+      noteTagsEl.innerHTML = Array.from(tags)
+        .sort((a, b) => a.localeCompare(b))
+        .map((tag) => `<option value="${esc(tag)}"></option>`)
+        .join('');
+    }
+
+    function renderTagChips(inputEl) {
+      const key = inputEl.getAttribute('data-key') || '';
+      const meta = rowMeta.get(key) || { viewed: false, notes: '' };
+      const wrap = inputEl.parentElement.querySelector('[data-role="tags"]');
+      if (!wrap) return;
+      const tags = tokenizeNotes(meta.notes);
+      wrap.innerHTML = tags.map((tag) => `<span class="note-tag">${esc(tag)}</span>`).join('');
+    }
+
+    async function patchItem(itemId, payload) {
+      const res = await fetch(`/api/items/${itemId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || 'Patch failed');
+      }
+      return res.json();
+    }
+
+    function renderRows(items) {
+      rowsEl.innerHTML = items.map((item, idx) => `
+        <tr>
+          <td>${idx + 1}</td>
+          <td class="mono"><a href="${esc(item.file_url || '')}" target="_blank" rel="noopener">${esc(item.filename || '')}</a></td>
+          <td class="mono">${item.is_pdf ? `<a href="${esc(item.mp4_url || '')}" target="_blank" rel="noopener">${esc(item.mp4_filename || '')}</a>` : ''}</td>
+          <td class="viewed-col"><input type="checkbox" data-role="viewed" data-id="${item.id}" ${item.viewed ? 'checked' : ''} /></td>
+          <td class="notes-col">
+            <div class="note-tags" data-role="tags" data-key="${item.id}"></div>
+            <input class="notes-input" list="noteTags" type="text" data-role="notes" data-key="${item.id}" data-id="${item.id}" value="${esc(item.notes || '')}" />
+          </td>
+        </tr>
+      `).join('');
+
+      rowsEl.querySelectorAll('input[data-role="notes"]').forEach((el) => {
+        const id = Number(el.getAttribute('data-id') || '0');
+        rowMeta.set(String(id), {
+          viewed: false,
+          notes: el.value || '',
+        });
+        renderTagChips(el);
+      });
+      updateTagSuggestions();
+    }
+
+    async function poll() {
+      const res = await fetch('/api/items');
+      const data = await res.json();
+      const state = data.state || {};
+      const items = data.items || [];
+
+      renderRows(items);
+      startBtn.disabled = !!state.running;
+
+      if (state.running) {
+        statusEl.textContent = 'Retrieving Files';
+        metaEl.textContent = `Query: ${state.query || ''} | Page: ${state.current_page || '-'} | Pages processed: ${state.pages_processed || 0} | Files seen: ${state.files_seen || 0} | Non-PDF seen: ${state.non_pdf_seen || 0}`;
+      } else if (state.error) {
+        statusEl.textContent = `Failed: ${state.error}`;
+        metaEl.textContent = state.current_url ? `DOJ URL: ${state.current_url}` : '';
+      } else if (items.length > 0) {
+        statusEl.textContent = `Complete. ${items.length} items.`;
+        metaEl.textContent = '';
+      } else {
+        statusEl.textContent = 'Idle';
+        metaEl.textContent = '';
+      }
+    }
+
+    startBtn.addEventListener('click', async () => {
+      const res = await fetch('/api/scrape', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: queryEl.value || 'no images produced' }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        statusEl.textContent = `Cannot start: ${data.detail || 'unknown error'}`;
+      }
+      await poll();
+    });
+
+    rowsEl.addEventListener('change', async (e) => {
+      const t = e.target;
+      if (!(t instanceof HTMLInputElement)) return;
+      if (t.getAttribute('data-role') !== 'viewed') return;
+      const id = Number(t.getAttribute('data-id') || '0');
+      if (!id) return;
+      try {
+        await patchItem(id, { viewed: t.checked });
+      } catch (err) {
+        statusEl.textContent = String(err);
+      }
+    });
+
+    let noteTimer = null;
+    rowsEl.addEventListener('input', (e) => {
+      const t = e.target;
+      if (!(t instanceof HTMLInputElement)) return;
+      if (t.getAttribute('data-role') !== 'notes') return;
+      const id = Number(t.getAttribute('data-id') || '0');
+      if (!id) return;
+
+      rowMeta.set(String(id), { viewed: false, notes: t.value || '' });
+      renderTagChips(t);
+      updateTagSuggestions();
+
+      if (noteTimer) clearTimeout(noteTimer);
+      noteTimer = setTimeout(async () => {
+        try {
+          await patchItem(id, { notes: t.value || '' });
+        } catch (err) {
+          statusEl.textContent = String(err);
+        }
+      }, 300);
+    });
+
+    setInterval(poll, 1500);
+    poll();
+  </script>
+</body>
+</html>

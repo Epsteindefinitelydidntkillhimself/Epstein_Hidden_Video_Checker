@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+results.csv
+doj_storage_state.json
+*.db
+.env
+.DS_Store
+node_modules/
+playwright/.cache/
