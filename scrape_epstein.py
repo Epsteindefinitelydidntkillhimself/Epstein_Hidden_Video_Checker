@@ -949,11 +949,10 @@ def scrape(
     last_error = ""
     with sync_playwright() as p:
         browser = p.chromium.launch(
-            channel="chrome",
             headless=not headed,
             args=[
-                "--disable-blink-features=AutomationControlled",
-                "--disable-features=IsolateOrigins,site-per-process",
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
             ],
         )
         try:
@@ -1034,11 +1033,10 @@ def scrape_one_page(
 ) -> tuple[List[ResultRow], List[NonPdfRow], int, str, str]:
     with sync_playwright() as p:
         browser = p.chromium.launch(
-            channel="chrome",
             headless=not headed,
             args=[
-                "--disable-blink-features=AutomationControlled",
-                "--disable-features=IsolateOrigins,site-per-process",
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
             ],
         )
         try:
